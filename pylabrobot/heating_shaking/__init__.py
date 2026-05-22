@@ -14,3 +14,6 @@ from pylabrobot.heating_shaking.inheco.thermoshake import (
   inheco_thermoshake_rm,
 )
 from pylabrobot.heating_shaking.inheco.thermoshake_backend import InhecoThermoshakeBackend
+from pylabrobot.heating_shaking.opentrons import OpentronsHeaterShakerModuleV1
+from pylabrobot.heating_shaking.opentrons_backend import OpentronsHeaterShakerBackend
+from pylabrobot.heating_shaking.opentrons_backend_usb import OpentronsHeaterShakerUSBBackend

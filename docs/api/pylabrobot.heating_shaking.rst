@@ -11,6 +11,7 @@ This package contains APIs for working with heater shakers.
   :recursive:
 
     heater_shaker.HeaterShaker
+    opentrons.OpentronsHeaterShakerModuleV1
 
 
 Backends
@@ -26,3 +27,5 @@ Backends
     inheco.thermoshake.inheco_thermoshake_ac
     inheco.thermoshake.inheco_thermoshake
     inheco.thermoshake.inheco_thermoshake_rm
+    opentrons_backend.OpentronsHeaterShakerBackend
+    opentrons_backend_usb.OpentronsHeaterShakerUSBBackend
