@@ -15,6 +15,7 @@ contributing-to-docs
 :caption: Adding Backends/Drivers
 
 device-driver-guide
+event-bus
 ```
 
 <hr>
