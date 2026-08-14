@@ -109,6 +109,7 @@ events.
 | `agilent.vspin.VSpin` | `centrifuge.spin` |
 | `agilent.vspin.Access2` | `centrifuge_loader.load`, `centrifuge_loader.unload` |
 | `brooks.precise_flex.PreciseFlex` | lifecycle, fault/home/freedrive, joint/cartesian/rail/gripper motion, pick/drop, park |
+| `manual_operator.ManualOperator` | arbitrary acknowledged manual actions; resource moves |
 
 Detailed operation references:
 
@@ -119,6 +120,7 @@ Detailed operation references:
 - [Agilent VSpin and Access2](event-bus/vspin.md)
 - [Brooks PreciseFlex](event-bus/precise-flex.md)
 - [Diagnostic transports](event-bus/diagnostic-transports.md)
+- [Manual operator actions](manual-operator.md#eventbus-integration)
 
 ## Operation reference
 

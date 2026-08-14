@@ -222,6 +222,30 @@ unit-bearing motion arguments where relevant. Low-level controller operations ca
 diagnostic listener, but higher-level resource-aware wrappers should emit the resource-transfer
 events when an arm is actually approaching, picking up, moving, or dropping a PLR resource.
 
+### Manual operator actions
+
+Manual operations use `manual_operator.<action>` so the event records both the manual executor and
+the semantic work requested. Represent the `ManualOperator` as `device`, list any direct modeled
+resources in `resources`, and preserve action-specific request data without substituting inferred
+deck resources. A genuine manual resource transfer additionally includes its actual `source` and
+`destination` resource references.
+
+```python
+{
+  "device": resource_reference(manual_operator),
+  "resources": [resource_reference(plate)],
+  "manual_action": "centrifuge.spin",
+  "title": "Spin sample plate",
+  "details": {
+    "relative_centrifugal_force_g": 300,
+    "duration_seconds": 180,
+  },
+}
+```
+
+Operator cancellation or a provider-reported failure is a failed lifecycle outcome. Completion
+metadata such as `confirmed_by` belongs only on the `.completed` event.
+
 ## Failure events
 
 A failed operation retains the original invocation context and adds:
