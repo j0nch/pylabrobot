@@ -426,6 +426,10 @@ class Access2ScriptedFTDITests(unittest.IsolatedAsyncioTestCase):
         )
       ),
       _ScriptStep(protocol.build_get_status(), _full_status_data(gripper_position=0)),
+      _ScriptStep(
+        protocol.build_get_sensor_values(),
+        Writer().u32(0x03 | protocol.STATUS_OPTICAL_PLATE_SENSOR).finish(),
+      ),
       _ScriptStep(protocol.build_move_to_teachpoint(protocol.TEACHPOINT_PARK, 0, 10)),
       _ScriptStep(protocol.build_get_status(), _full_status_data()),
       _ScriptStep(protocol.build_get_status(), _short_status_data()),
@@ -1122,6 +1126,25 @@ class Access2WorkflowTests(unittest.IsolatedAsyncioTestCase):
     self.driver._move_to_teachpoint.assert_awaited_once_with(  # type: ignore[attr-defined]
       protocol.TEACHPOINT_PICK, 3, 10, speed=protocol.SPEED_SLOW
     )
+
+  async def test_unload_requires_plate_on_loader_after_release(self):
+    ready = _status(flags=_READY_FLAGS)
+    self.driver.request_status = AsyncMock(return_value=ready)  # type: ignore[method-assign]
+    self.driver.request_sensor_values = AsyncMock(  # type: ignore[method-assign]
+      side_effect=[protocol.STATUS_OPTICAL_PLATE_SENSOR, protocol.SENSOR_NO_PLATE]
+    )
+
+    with self.assertRaisesRegex(RuntimeError, "no plate found on loader stage after unload"):
+      await self.driver.unload()
+
+    operation = self.driver.state.operation
+    self.assertIsInstance(operation, TransferProgress)
+    assert isinstance(operation, TransferProgress)
+    self.assertEqual(operation.phase, TransferPhase.RELEASING)
+    self.assertTrue(self.driver.state.recovery_required)
+    self.assertEqual(self.driver.state.last_teachpoint, protocol.TEACHPOINT_PICK)
+    self.assertEqual(self.driver.request_sensor_values.await_count, 2)  # type: ignore[attr-defined]
+    self.assertEqual(self.driver._move_to_teachpoint.await_count, 2)  # type: ignore[attr-defined]
 
   async def test_estop_prevents_load_motion(self):
     self.driver.request_status = AsyncMock(  # type: ignore[method-assign]

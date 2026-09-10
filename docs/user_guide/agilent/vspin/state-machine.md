@@ -152,9 +152,10 @@ Load and unload follow the same phases with opposite source and destination rout
 {download}`Download the transfer diagram source <images/access2-transfer.dot>`
 
 The driver checks source plate presence, grip, destination motion, gripper opening,
-and return to park before completing the transfer. On success, Access2 returns to
-`IDLE`, its last teachpoint is park, and PLR moves the plate's resource assignment to
-the destination. The same VSpin bucket remains presented.
+and return to park before completing the transfer. An unload also confirms plate
+presence on the loader stage after release and before returning to park. On success,
+Access2 returns to `IDLE`, its last teachpoint is park, and PLR moves the plate's resource
+assignment to the destination. The same VSpin bucket remains presented.
 
 Your workflow must keep the loader clear before rotor motion, keep transfer destinations
 empty, and provide compatible, balanced plates for spinning. The state model and resource

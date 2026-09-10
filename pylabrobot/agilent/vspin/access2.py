@@ -813,6 +813,11 @@ class Access2Driver:
         speed=gripper_release_speed_code,
       )
 
+      if direction is TransferDirection.OUT_OF_CENTRIFUGE:
+        sensor_values = await self.request_sensor_values()
+        if not sensor_values & protocol.STATUS_OPTICAL_PLATE_SENSOR:
+          raise RuntimeError("no plate found on loader stage after unload")
+
       self._set_transfer_phase(TransferPhase.RETURNING_TO_PARK)
       self._state = dataclasses.replace(self._state, last_teachpoint=None)
       transition.mark_actuated(position_uncertain=True)
