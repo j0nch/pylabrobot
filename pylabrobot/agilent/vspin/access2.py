@@ -67,6 +67,26 @@ class TransferRoute:
   source_name: str
 
 
+@dataclasses.dataclass(frozen=True)
+class Access2GripDiagnostic:
+  """Observed controller state from a stationary loader-stage grip test."""
+
+  gripper_position: float
+  gripper_close_threshold: float
+  gripper_closed_position: float
+  optical_plate_sensor: bool
+  command_result: int
+  accepted_by_transfer_validation: bool
+
+  @property
+  def threshold_margin(self) -> float:
+    return self.gripper_position - self.gripper_close_threshold
+
+  @property
+  def target_clearance(self) -> float:
+    return self.gripper_closed_position - self.gripper_position
+
+
 def _transfer_route(
   direction: TransferDirection,
   bucket_teachpoint: int,
@@ -117,6 +137,18 @@ def _loader_unload_event_context(self: "Access2", **parameters: float | str) -> 
     "resources": [] if plate is None else [resource_reference(plate)],
     "source": resource_reference(bucket),
     "destination": resource_reference(self),
+    "parameters": parameters,
+  }
+
+
+def _loader_grip_diagnostic_event_context(
+  self: "Access2", **parameters: float | str
+) -> dict[str, object]:
+  plate = self.resource
+  return {
+    "device": resource_reference(self),
+    "resources": [] if plate is None else [resource_reference(plate)],
+    "source": resource_reference(self),
     "parameters": parameters,
   }
 
@@ -598,6 +630,146 @@ class Access2Driver:
       )
     return status
 
+  async def run_stage_grip_diagnostic(
+    self,
+    *,
+    plate_height: float,
+    source_z_offset: float = 3,
+    park_z_offset: float = 3,
+    gripper_open_position: float = _DEFAULT_GRIPPER_OPEN_POSITION,
+    gripper_closed_position: float = _DEFAULT_GRIPPER_CLOSED_POSITION,
+    gripper_close_threshold: float = _DEFAULT_GRIPPER_CLOSE_THRESHOLD,
+    source_speed: Access2Speed = "slow",
+    park_speed: Access2Speed = "slow",
+    gripper_open_speed: Access2Speed = "fast",
+    gripper_close_speed: Access2Speed = "slow",
+    gripper_release_speed: Access2Speed = "slow",
+    hold_seconds: float = 5,
+  ) -> Access2GripDiagnostic:
+    """Grip a plate at the loader stage, observe it in place, then release and park.
+
+    This diagnostic never moves horizontally while holding the plate and does not
+    change the resource model. ``hold_seconds`` provides a fixed visual-inspection
+    window; the method always releases the plate before returning.
+    """
+
+    if not all(
+      math.isfinite(value)
+      for value in (
+        plate_height,
+        source_z_offset,
+        park_z_offset,
+        gripper_open_position,
+        gripper_closed_position,
+        gripper_close_threshold,
+        hold_seconds,
+      )
+    ):
+      raise ValueError("Grip diagnostic parameters must be finite")
+    if plate_height <= 0:
+      raise ValueError("Plate height must be positive")
+    if hold_seconds < 0:
+      raise ValueError("Grip diagnostic hold time cannot be negative")
+    if not gripper_open_position < gripper_close_threshold <= gripper_closed_position:
+      raise ValueError(
+        "Gripper positions must satisfy open position < close threshold <= closed position"
+      )
+
+    source_speed_code = _speed_code(source_speed)
+    park_speed_code = _speed_code(park_speed)
+    gripper_open_speed_code = _speed_code(gripper_open_speed)
+    gripper_close_speed_code = _speed_code(gripper_close_speed)
+    gripper_release_speed_code = _speed_code(gripper_release_speed)
+
+    async with self._operation_scope(Access2Activity.MOVING) as transition:
+      await self._require_ready(operation="stage-grip diagnostic precondition")
+      if self._state.last_teachpoint != protocol.TEACHPOINT_PARK:
+        raise RuntimeError("Access2 must be confirmed parked before a stage-grip diagnostic")
+
+      transition.mark_actuated()
+      await self._move_axis_to_position(
+        protocol.AXIS_GRIPPER,
+        gripper_open_position,
+        profile=protocol.PROFILE_DYNAMIC_EMPTY,
+        speed=gripper_open_speed_code,
+      )
+
+      self._state = dataclasses.replace(self._state, last_teachpoint=None)
+      transition.mark_actuated(position_uncertain=True)
+      await self._move_to_teachpoint(
+        protocol.TEACHPOINT_PICK,
+        source_z_offset,
+        plate_height,
+        speed=source_speed_code,
+      )
+      self._state = dataclasses.replace(
+        self._state,
+        last_teachpoint=protocol.TEACHPOINT_PICK,
+      )
+      transition.confirm_position()
+
+      sensor_values = await self.request_sensor_values()
+      if not sensor_values & protocol.STATUS_OPTICAL_PLATE_SENSOR:
+        raise RuntimeError("no plate found on stage")
+
+      transition.mark_actuated()
+      response = await self.send_command(
+        protocol.build_move_axis_to_position(
+          protocol.AXIS_GRIPPER,
+          gripper_closed_position,
+          protocol.PROFILE_DYNAMIC_EMPTY,
+          gripper_close_speed_code,
+        ),
+        raise_on_error=False,
+      )
+      status = await self._wait_until_motion_complete(
+        (protocol.AXIS_GRIPPER,),
+        operation="diagnostic close gripper",
+      )
+      if status.gripper_position is None:
+        raise RuntimeError("Access2 did not report gripper position after diagnostic close")
+
+      accepted = self._gripper_is_closed(
+        status,
+        gripper_closed_position=gripper_closed_position,
+        gripper_close_threshold=gripper_close_threshold,
+      ) and (response.result == 0 or status.optical_plate_sensor)
+      result = Access2GripDiagnostic(
+        gripper_position=status.gripper_position,
+        gripper_close_threshold=gripper_close_threshold,
+        gripper_closed_position=gripper_closed_position,
+        optical_plate_sensor=status.optical_plate_sensor,
+        command_result=response.result,
+        accepted_by_transfer_validation=accepted,
+      )
+
+      try:
+        await asyncio.sleep(hold_seconds)
+      finally:
+        transition.mark_actuated()
+        await self._move_axis_to_position(
+          protocol.AXIS_GRIPPER,
+          gripper_open_position,
+          profile=protocol.PROFILE_DYNAMIC_EMPTY,
+          speed=gripper_release_speed_code,
+        )
+        self._state = dataclasses.replace(self._state, last_teachpoint=None)
+        transition.mark_actuated(position_uncertain=True)
+        await self._move_to_teachpoint(
+          protocol.TEACHPOINT_PARK,
+          park_z_offset,
+          plate_height,
+          speed=park_speed_code,
+        )
+        self._state = dataclasses.replace(
+          self._state,
+          last_teachpoint=protocol.TEACHPOINT_PARK,
+        )
+        transition.confirm_position()
+
+      await self._require_ready(operation="stage-grip diagnostic postcondition")
+      return result
+
   async def park(
     self, *, plate_height: float = 15, z_offset: float = 8, speed: Access2Speed = "slow"
   ) -> None:
@@ -992,6 +1164,44 @@ class Access2(ResourceHolder):
   async def stop(self) -> None:
     """Close the loader transport and invalidate session-scoped driver state."""
     await self.driver.stop()
+
+  @evented_operation(
+    "centrifuge_loader.stage_grip_diagnostic", _loader_grip_diagnostic_event_context
+  )
+  async def run_stage_grip_diagnostic(
+    self,
+    *,
+    plate_height: float,
+    source_z_offset: float = 3,
+    park_z_offset: float = 3,
+    gripper_open_position: float = _DEFAULT_GRIPPER_OPEN_POSITION,
+    gripper_closed_position: float = _DEFAULT_GRIPPER_CLOSED_POSITION,
+    gripper_close_threshold: float = _DEFAULT_GRIPPER_CLOSE_THRESHOLD,
+    source_speed: Access2Speed = "slow",
+    park_speed: Access2Speed = "slow",
+    gripper_open_speed: Access2Speed = "fast",
+    gripper_close_speed: Access2Speed = "slow",
+    gripper_release_speed: Access2Speed = "slow",
+    hold_seconds: float = 5,
+  ) -> Access2GripDiagnostic:
+    """Inspect a stationary grip on the loader plate without changing assignments."""
+
+    if self.resource is None:
+      raise LoaderNoPlateError("Loader must have a plate for a stage-grip diagnostic.")
+    return await self.driver.run_stage_grip_diagnostic(
+      plate_height=plate_height,
+      source_z_offset=source_z_offset,
+      park_z_offset=park_z_offset,
+      gripper_open_position=gripper_open_position,
+      gripper_closed_position=gripper_closed_position,
+      gripper_close_threshold=gripper_close_threshold,
+      source_speed=source_speed,
+      park_speed=park_speed,
+      gripper_open_speed=gripper_open_speed,
+      gripper_close_speed=gripper_close_speed,
+      gripper_release_speed=gripper_release_speed,
+      hold_seconds=hold_seconds,
+    )
 
   def _teachpoint_for_bucket(self, bucket: ResourceHolder) -> int:
     """Map a VSpin bucket resource to its Access2 protocol teachpoint."""

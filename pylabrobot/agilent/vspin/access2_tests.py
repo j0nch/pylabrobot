@@ -665,6 +665,74 @@ class Access2WorkflowTests(unittest.IsolatedAsyncioTestCase):
     self.driver._move_to_teachpoint = AsyncMock()  # type: ignore[method-assign]
     self.driver._close_gripper = AsyncMock()  # type: ignore[method-assign]
 
+  async def test_stage_grip_diagnostic_observes_then_releases_without_horizontal_transfer(self):
+    ready = _status(flags=_READY_FLAGS)
+    grip_status = protocol.decode_status(
+      _full_status_data(
+        flags=_READY_FLAGS | protocol.STATUS_OPTICAL_PLATE_SENSOR,
+        gripper_position=1.94,
+      )
+    )
+    self.driver.request_status = AsyncMock(  # type: ignore[method-assign]
+      side_effect=[ready, ready]
+    )
+    self.driver.request_sensor_values = AsyncMock(  # type: ignore[method-assign]
+      return_value=protocol.STATUS_OPTICAL_PLATE_SENSOR
+    )
+    self.driver.send_command = AsyncMock(  # type: ignore[method-assign]
+      return_value=protocol.Access2Reply(response_id=0x47, result=0x51, data=b"")
+    )
+    self.driver._wait_until_motion_complete = AsyncMock(  # type: ignore[method-assign]
+      return_value=grip_status
+    )
+
+    with patch("pylabrobot.agilent.vspin.access2.asyncio.sleep", new=AsyncMock()) as sleep:
+      result = await self.driver.run_stage_grip_diagnostic(
+        plate_height=31.6,
+        source_z_offset=3,
+        park_z_offset=2,
+        gripper_closed_position=5.7,
+        gripper_close_threshold=1.8,
+        source_speed="medium",
+        park_speed="fast",
+        gripper_open_speed="fast",
+        gripper_close_speed="slow",
+        gripper_release_speed="medium",
+        hold_seconds=7,
+      )
+
+    self.assertAlmostEqual(result.gripper_position, 1.94, places=6)
+    self.assertAlmostEqual(result.threshold_margin, 0.14, places=6)
+    self.assertAlmostEqual(result.target_clearance, 3.76, places=6)
+    self.assertTrue(result.optical_plate_sensor)
+    self.assertEqual(result.command_result, 0x51)
+    self.assertTrue(result.accepted_by_transfer_validation)
+    sleep.assert_awaited_once_with(7)
+    self.driver._move_axis_to_position.assert_has_awaits(  # type: ignore[attr-defined]
+      [
+        call(
+          protocol.AXIS_GRIPPER,
+          0,
+          profile=protocol.PROFILE_DYNAMIC_EMPTY,
+          speed=protocol.SPEED_FAST,
+        ),
+        call(
+          protocol.AXIS_GRIPPER,
+          0,
+          profile=protocol.PROFILE_DYNAMIC_EMPTY,
+          speed=protocol.SPEED_MEDIUM,
+        ),
+      ]
+    )
+    self.driver._move_to_teachpoint.assert_has_awaits(  # type: ignore[attr-defined]
+      [
+        call(protocol.TEACHPOINT_PICK, 3, 31.6, speed=protocol.SPEED_MEDIUM),
+        call(protocol.TEACHPOINT_PARK, 2, 31.6, speed=protocol.SPEED_FAST),
+      ]
+    )
+    self.assertEqual(self.driver.state.operation, Access2Activity.IDLE)
+    self.assertEqual(self.driver.state.last_teachpoint, protocol.TEACHPOINT_PARK)
+
   async def test_park_parameters_are_per_call(self):
     self.driver.request_status = AsyncMock(  # type: ignore[method-assign]
       return_value=_status(flags=_READY_FLAGS)
