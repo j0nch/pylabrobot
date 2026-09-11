@@ -74,6 +74,7 @@ class Access2GripDiagnostic:
   gripper_position: float
   gripper_close_threshold: float
   gripper_closed_position: float
+  lift_distance: float
   optical_plate_sensor: bool
   command_result: int
   accepted_by_transfer_validation: bool
@@ -644,13 +645,15 @@ class Access2Driver:
     gripper_open_speed: Access2Speed = "fast",
     gripper_close_speed: Access2Speed = "slow",
     gripper_release_speed: Access2Speed = "slow",
+    lift_distance: float = 2,
     hold_seconds: float = 5,
   ) -> Access2GripDiagnostic:
     """Grip a plate at the loader stage, observe it in place, then release and park.
 
-    This diagnostic never moves horizontally while holding the plate and does not
-    change the resource model. ``hold_seconds`` provides a fixed visual-inspection
-    window; the method always releases the plate before returning.
+    This diagnostic lifts and lowers only at the loader teachpoint, never moves
+    horizontally while holding the plate, and does not change the resource model.
+    ``hold_seconds`` provides a fixed visual-inspection window while suspended;
+    the method always reseats and releases the plate before returning.
     """
 
     if not all(
@@ -662,6 +665,7 @@ class Access2Driver:
         gripper_open_position,
         gripper_closed_position,
         gripper_close_threshold,
+        lift_distance,
         hold_seconds,
       )
     ):
@@ -670,6 +674,8 @@ class Access2Driver:
       raise ValueError("Plate height must be positive")
     if hold_seconds < 0:
       raise ValueError("Grip diagnostic hold time cannot be negative")
+    if lift_distance < 0:
+      raise ValueError("Grip diagnostic lift distance cannot be negative")
     if not gripper_open_position < gripper_close_threshold <= gripper_closed_position:
       raise ValueError(
         "Gripper positions must satisfy open position < close threshold <= closed position"
@@ -738,14 +744,49 @@ class Access2Driver:
         gripper_position=status.gripper_position,
         gripper_close_threshold=gripper_close_threshold,
         gripper_closed_position=gripper_closed_position,
+        lift_distance=lift_distance,
         optical_plate_sensor=status.optical_plate_sensor,
         command_result=response.result,
         accepted_by_transfer_validation=accepted,
       )
 
+      plate_lifted = False
       try:
+        if lift_distance > 0:
+          self._state = dataclasses.replace(self._state, last_teachpoint=None)
+          transition.mark_actuated(position_uncertain=True)
+          await self._move_to_teachpoint(
+            protocol.TEACHPOINT_PICK,
+            source_z_offset + lift_distance,
+            plate_height,
+            profile=protocol.PROFILE_DYNAMIC_FULL,
+            speed=source_speed_code,
+          )
+          self._state = dataclasses.replace(
+            self._state,
+            last_teachpoint=protocol.TEACHPOINT_PICK,
+          )
+          transition.confirm_position()
+          plate_lifted = True
+
         await asyncio.sleep(hold_seconds)
       finally:
+        if plate_lifted:
+          self._state = dataclasses.replace(self._state, last_teachpoint=None)
+          transition.mark_actuated(position_uncertain=True)
+          await self._move_to_teachpoint(
+            protocol.TEACHPOINT_PICK,
+            source_z_offset,
+            plate_height,
+            profile=protocol.PROFILE_DYNAMIC_FULL,
+            speed=source_speed_code,
+          )
+          self._state = dataclasses.replace(
+            self._state,
+            last_teachpoint=protocol.TEACHPOINT_PICK,
+          )
+          transition.confirm_position()
+
         transition.mark_actuated()
         await self._move_axis_to_position(
           protocol.AXIS_GRIPPER,
@@ -1182,6 +1223,7 @@ class Access2(ResourceHolder):
     gripper_open_speed: Access2Speed = "fast",
     gripper_close_speed: Access2Speed = "slow",
     gripper_release_speed: Access2Speed = "slow",
+    lift_distance: float = 2,
     hold_seconds: float = 5,
   ) -> Access2GripDiagnostic:
     """Inspect a stationary grip on the loader plate without changing assignments."""
@@ -1200,6 +1242,7 @@ class Access2(ResourceHolder):
       gripper_open_speed=gripper_open_speed,
       gripper_close_speed=gripper_close_speed,
       gripper_release_speed=gripper_release_speed,
+      lift_distance=lift_distance,
       hold_seconds=hold_seconds,
     )
 

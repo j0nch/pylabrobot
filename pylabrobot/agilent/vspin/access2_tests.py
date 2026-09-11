@@ -698,12 +698,14 @@ class Access2WorkflowTests(unittest.IsolatedAsyncioTestCase):
         gripper_open_speed="fast",
         gripper_close_speed="slow",
         gripper_release_speed="medium",
+        lift_distance=2,
         hold_seconds=7,
       )
 
     self.assertAlmostEqual(result.gripper_position, 1.94, places=6)
     self.assertAlmostEqual(result.threshold_margin, 0.14, places=6)
     self.assertAlmostEqual(result.target_clearance, 3.76, places=6)
+    self.assertEqual(result.lift_distance, 2)
     self.assertTrue(result.optical_plate_sensor)
     self.assertEqual(result.command_result, 0x51)
     self.assertTrue(result.accepted_by_transfer_validation)
@@ -727,6 +729,20 @@ class Access2WorkflowTests(unittest.IsolatedAsyncioTestCase):
     self.driver._move_to_teachpoint.assert_has_awaits(  # type: ignore[attr-defined]
       [
         call(protocol.TEACHPOINT_PICK, 3, 31.6, speed=protocol.SPEED_MEDIUM),
+        call(
+          protocol.TEACHPOINT_PICK,
+          5,
+          31.6,
+          profile=protocol.PROFILE_DYNAMIC_FULL,
+          speed=protocol.SPEED_MEDIUM,
+        ),
+        call(
+          protocol.TEACHPOINT_PICK,
+          3,
+          31.6,
+          profile=protocol.PROFILE_DYNAMIC_FULL,
+          speed=protocol.SPEED_MEDIUM,
+        ),
         call(protocol.TEACHPOINT_PARK, 2, 31.6, speed=protocol.SPEED_FAST),
       ]
     )
